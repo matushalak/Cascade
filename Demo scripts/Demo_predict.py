@@ -45,6 +45,41 @@ from cascade2p.utils import plot_dFF_traces, plot_noise_level_distribution, plot
 Define function to load dF/F traces from disk
 
 """
+from mat73 import loadmat as hdf_loadmat
+class Dict_to_Class:
+    'recursively gets rid of dictionaries'
+    def __init__(self, attrs:dict):
+        for att_k, att_v in attrs.items():
+            if isinstance(att_v, dict):
+                setattr(self, att_k, Dict_to_Class(att_v))
+            else:
+                setattr(self, att_k, att_v)
+
+class SPSIG:
+    ''''
+    Works for both SPSIG and SPSIG_Res
+    Turns SPSIG.mat file into
+    '''
+    def __init__(self,
+                 SPSIG_mat_path:str): # path to ..._SPSIG.mat file
+        
+        try:
+            # old version < v7.3 mat file
+            SPSIG_dict = sio.loadmat(SPSIG_mat_path, simplify_cells = True)
+            
+        except NotImplementedError:
+            # Load > v7.3 .mat hdf5 file
+            SPSIG_dict = hdf_loadmat(SPSIG_mat_path)
+        
+        # set attributes to keys of SPSIG_dict
+        for k, v in SPSIG_dict.items():
+            if k.startswith('__'):
+                continue
+            
+            elif isinstance(v, dict):
+                setattr(self, k, Dict_to_Class(v))
+            else:
+                setattr(self, k, v)
 
 
 def load_neurons_x_time(file_path):
@@ -62,9 +97,17 @@ def load_neurons_x_time(file_path):
 
     # traces should be 2d array with shape (neurons, nr_timepoints)
 
-    traces = sio.loadmat(file_path)['dF_traces']
+    spsig = SPSIG(file_path)
+    traces = spsig.sigCorrected
+    frame_rate = spsig.freq
+    del spsig # free up memory ?
+    if traces.shape[1] < traces.shape[0]:
+       traces = traces.T # to match (neurons, nr_timepoints) expected shape
+    
+    return traces, frame_rate
 
-    return traces
+
+
 
 
 
@@ -75,20 +118,19 @@ Load dF/F traces, define frame rate and plot example traces
 """
 
 
-example_file = 'Example_datasets/Multiplane-OGB1-zf-pDp-Rupprecht-7.5Hz/Calcium_traces_04.mat'
-frame_rate = 7.5 # in Hz
+example_file = '/Volumes/my_SSD/NiNdata/test/group1/Epsilon/20211111/Bar_Tone_LR/Epsilon_20211111_003_normcorr_SPSIG.mat'
+# frame_rate = 7.5 # in Hz
 
-traces = load_neurons_x_time( example_file )
+traces, frame_rate = load_neurons_x_time( example_file )
 print('Number of neurons in dataset:', traces.shape[0])
 print('Number of timepoints in dataset:', traces.shape[1])
-
 
 noise_levels = plot_noise_level_distribution(traces,frame_rate)
 
 
 #np.random.seed(3952)
-neuron_indices = np.random.randint(traces.shape[0], size=10)
-plot_dFF_traces(traces,neuron_indices,frame_rate)
+# neuron_indices = np.random.randint(traces.shape[0], size=10)
+# plot_dFF_traces(traces,neuron_indices,frame_rate)
 
 
 """
@@ -97,14 +139,14 @@ Load list of available models
 
 """
 
-cascade.download_model( 'update_models',verbose = 1)
+# cascade.download_model( 'update_models',verbose = 1)
 
-yaml_file = open('Pretrained_models/available_models.yaml')
-X = yaml.load(yaml_file)
-list_of_models = list(X.keys())
+# yaml_file = open('Pretrained_models/available_models.yaml')
+# X = yaml.load(yaml_file)
+# list_of_models = list(X.keys())
 
-for model in list_of_models:
-  print(model)
+# for model in list_of_models:
+#   print(model)
 
 
 
@@ -114,10 +156,14 @@ for model in list_of_models:
 Select pretrained model and apply to dF/F data
 
 """
+# these seem relevant for out data
+# 'GC8m_EXC_15Hz_smoothing100ms_high_noise'
+# 'GC8_EXC_15Hz_smoothing100ms_high_noise'
+model_name = 'GC8m_EXC_15Hz_smoothing100ms_high_noise'
+if model_name not in os.listdir('Pretrained_models'):
+    cascade.download_model( model_name,verbose = 1)
 
-model_name = 'OGB_zf_pDp_7.5Hz_smoothing200ms'
-cascade.download_model( model_name,verbose = 1)
-
+print('Using {} model'.format(model_name))
 spike_prob = cascade.predict( model_name, traces )
 
 
@@ -140,7 +186,7 @@ sio.savemat(save_path+'.mat', {'spike_prob':spike_prob})
 Plot example predictions
 
 """
-
+breakpoint()
 neuron_indices = np.random.randint(traces.shape[0], size=10)
 plot_dFF_traces(traces,neuron_indices,frame_rate,spike_prob)
 
@@ -152,7 +198,7 @@ Plot noise-matched examples from the ground truth
 
 """
 
-median_noise = np.round(np.median(noise_levels))
-nb_traces = 8
-duration = 50 # seconds
-plot_noise_matched_ground_truth( model_name, median_noise, frame_rate, nb_traces, duration )
+# median_noise = np.round(np.median(noise_levels))
+# nb_traces = 8
+# duration = 50 # seconds
+# plot_noise_matched_ground_truth( model_name, median_noise, frame_rate, nb_traces, duration )

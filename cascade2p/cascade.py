@@ -31,9 +31,12 @@ Additional functions in this file are used to navigate different models ('get_mo
 """
 
 import os
+import gc
 import time
 import numpy as np
 import warnings
+from tensorflow import keras
+from keras.optimizers import Adagrad
 from . import config, utils
 
 
@@ -69,9 +72,6 @@ def train_model(
         All results are saved in the folder model_name as .h5 files containing the trained model
 
     """
-    import tensorflow.keras
-    from tensorflow.keras.optimizers import Adagrad
-
     model_path = os.path.join(model_folder, model_name)
     cfg_file = os.path.join(model_path, "config.yaml")
 
@@ -261,8 +261,8 @@ def transfer_train_model(
         All results are saved in the folder model_name as .h5 files containing the trained model
 
     """
-    import tensorflow.keras
-    from tensorflow.keras.optimizers import Adagrad
+    import keras
+    from keras.optimizers import Adagrad
 
     model_template_path = os.path.join(model_folder, template_model)
     cfg_file_template = os.path.join(model_template_path, "config.yaml")
@@ -363,7 +363,7 @@ def transfer_train_model(
     curr_model_nr = 0
 
     print(training_folders[0])
-    from tensorflow.keras.models import load_model
+    from keras.models import load_model
     
     for noise_level in cfg["noise_levels"]:
       
@@ -520,8 +520,9 @@ def predict(
         This array can contain NaNs if the value 'padding' was np.nan as input argument
 
     """
-    import tensorflow.keras
-    from tensorflow.keras.models import load_model
+    from tensorflow import keras
+    from keras.models import load_model
+    import multiprocessing as mp
 
     # reshape matrix of traces if only a single neuron's activity is provided as input to the inference
     if len(traces.shape) == 1:
@@ -616,6 +617,7 @@ def predict(
         print("Loaded models:", str(model_dict))
 
     # XX has shape: (neurons, timepoints, windowsize)
+    # for each timepoint, get windowsize around it
     XX = utils.preprocess_traces(
         traces, before_frac=before_frac, window_size=window_size
     )
@@ -643,10 +645,10 @@ def predict(
             continue  # jump to next noise level
 
         # load keras models for the given noise level
-        models = list()
+        models : list[keras.Model] = list()
         for model_path in model_dict[model_noise]:
             models.append(load_model(model_path))
-
+        print('Succesfully loaded all {} models'.format(len(models)))
         # select neurons and merge neurons and timepoints into one dimension
         XX_sel = XX[neuron_idx, :, :]
 
@@ -655,19 +657,37 @@ def predict(
         )
         XX_sel = np.expand_dims(
             XX_sel, axis=2
-        )  # add empty third dimension to match training shape
+        )  # add empty third dimension (1) to match training shape
 
+        # XX data is (neurons, timepoints, windowsize)
+        # network input is (windowsize, 1) = one 'depth' row
+        # Therefore can Collapse neurons and timepoints since each timepoint for each neuron is evaluated separately
+        # inputs to the network XX_sel is (n_neurons {with corresponding noise level} * n_timepoints, windowsize, 1)
+        in_dim = (XX[neuron_idx, :, :].shape[0] * XX[neuron_idx, :, :].shape[1], XX.shape[-1], 1)
+        assert XX_sel.shape == in_dim, 'Incorrect dimensions of network input {} instead of {}!'.format(XX_sel.shape, in_dim)
+        
+        # generator keras.Sequence to run on cpu-based multiprocessing
+        # XX_sel_Dataset : keras.utils.Sequence = CalciumDataset(XX_sel=XX_sel, batch_size = 100)
+        # print('CalciumDataset successfully initialized, starting spike prediction!')
+        # this data is then passed to the model in batches along the first biggest dimension (neurons * timepoints)
         for j, model in enumerate(models):
+            
             if verbose:
                 print("\t... ensemble", j)
 
-            prediction_flat = model.predict(XX_sel, batch_size, verbose=verbose)
+            # prediction_flat = model.predict(XX_sel_Dataset, verbose=verbose, 
+            #                                 workers = mp.cpu_count(), use_multiprocessing = True) # batch size specified in the Dataset
+            # samples = ((model, XX_sel[s,:,:]) for s in range(XX_sel.shape[0])) # samples generator
+            # with mp.Pool(processes=mp.cpu_count()) as pool:
+            #     res = pool.starmap(single_prediction, samples)
+            prediction_flat = model.predict(XX_sel, batch_size = batch_size * 2, verbose=verbose)
             prediction = np.reshape(prediction_flat, (len(neuron_idx), XX.shape[1]))
 
             Y_predict[neuron_idx, :] += prediction / len(models)  # average predictions
-
+            del prediction_flat, prediction
+            _ = gc.collect()
         # remove models from memory
-        tensorflow.keras.backend.clear_session()
+        keras.backend.clear_session()
 
     if threshold is False:  # only if 'False' is passed as argument
         if verbose:
@@ -727,6 +747,30 @@ def predict(
 
     return Y_predict
 
+# generator to load data more efficiently
+# TODO: generalize for all noise levels
+# class CalciumDataset(keras.utils.Sequence):
+#     def __init__(self, XX_sel : np.ndarray, batch_size : int):
+#         super().__init__()
+#         self.batch_size = batch_size
+#         self.XX  = XX_sel
+#         self.samples, self.windowsize, _ = self.XX.shape
+
+#     def __len__(self):
+#         # number of batches in dataset
+#         return int(np.ceil(self.samples / self.batch_size))
+    
+#     def __getitem__(self, batch_index):
+#         # returns (batchsize, windowsize, 1) batch
+#         low = batch_index * self.batch_size
+#         high = min(low + self.batch_size, self.samples)
+#         batch = self.XX[low:high, :, :]
+#         return batch
+
+# def single_prediction(model:keras.Model, sample:np.ndarray) -> np.ndarray:
+#     res = model(sample)
+#     del model
+#     return res
 
 def verify_config_dict(config_dictionary):
 

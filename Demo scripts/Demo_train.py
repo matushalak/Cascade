@@ -26,6 +26,7 @@ Import python packages
 """
 
 import os
+import sys
 
 if "Demo scripts" in os.getcwd():
     sys.path.append(os.path.abspath(".."))  # add parent directory to path for imports

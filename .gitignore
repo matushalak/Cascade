@@ -4,3 +4,13 @@ __pycache__/
 .ipynb_checkpoints/
 *.eggs/
 *.egg-info/
+/bin
+.DS_Store
+/conda-meta
+/include
+/lib
+/man
+/sbin
+/share
+/ssl
+/etc/jupyter
