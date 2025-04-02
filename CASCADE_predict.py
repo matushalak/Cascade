@@ -14,7 +14,7 @@ predictions. As input, it uses the loaded calcium recordings ('traces') and
 the pretrained model ('model_name'). The output is a matrix with the inferred spike rates.
 
 """
-import os, sys, glob, re
+import os, sys, glob, re, gc
 
 import numpy as np
 import scipy.io as sio
@@ -41,7 +41,7 @@ def main(spsig_file:str,
     """
     print(f'Estimating spikes from {spsig_file}')
 
-    traces, frame_rate = load_neurons_x_time( spsig_file )
+    traces, frame_rate = load_neurons_x_time(spsig_file)
     print('Number of neurons in dataset:', traces.shape[0])
     print('Number of timepoints in dataset:', traces.shape[1])
 
@@ -60,13 +60,15 @@ def main(spsig_file:str,
     print('Using {} model'.format(model_name))
     # break it up into chunks if more than 100 neurons
     if traces.shape[0] > 100:
+        print('Splitting up into batches of 100 neurons to spare computational load')
         spike_prob = np.empty_like(traces)
         hundreds  = traces.shape[0] // 100
         ranges = [(r * 100, r * 100 + 100) for r in range(hundreds)]
         for start, end in ranges:
-            spike_prob[start:end,:] = cascade.predict(model_name, traces[start:end, :])
+            spike_prob[start:end,:] = cascade.predict(model_name, traces[start:end, :], padding = 0)
     else:
-        spike_prob = cascade.predict( model_name, traces )
+        print('Processing all at once (<= 100 neurons)')
+        spike_prob = cascade.predict( model_name, traces, padding = 0)
 
     """
 
@@ -84,7 +86,9 @@ def main(spsig_file:str,
     Plot example predictions
 
     """
-    if PLOT:
+    if not PLOT:
+        del spike_prob, traces
+    else:
         print('Feel free to explore the dataset in the terminal with: \nneuron_indices = np.random.randint(traces.shape[0], size=10)\nplot_dFF_traces(traces,neuron_indices,frame_rate,spike_prob)\nplt.show()')
         neuron_indices = np.random.randint(traces.shape[0], size=10)
         plot_dFF_traces(traces,neuron_indices,frame_rate,spike_prob)
@@ -92,46 +96,6 @@ def main(spsig_file:str,
 
         breakpoint()
 
-"""
-
-Classes that nicely process matlab files into python classes easier to work with 
-
-"""
-
-class Dict_to_Class:
-    'recursively gets rid of dictionaries'
-    def __init__(self, attrs:dict):
-        for att_k, att_v in attrs.items():
-            if isinstance(att_v, dict):
-                setattr(self, att_k, Dict_to_Class(att_v))
-            else:
-                setattr(self, att_k, att_v)
-
-class SPSIG:
-    ''''
-    Works for both SPSIG and SPSIG_Res
-    Turns SPSIG.mat file into
-    '''
-    def __init__(self,
-                 SPSIG_mat_path:str): # path to ..._SPSIG.mat file
-        
-        try:
-            # old version < v7.3 mat file
-            SPSIG_dict = sio.loadmat(SPSIG_mat_path, simplify_cells = True)
-            
-        except NotImplementedError:
-            # Load > v7.3 .mat hdf5 file
-            SPSIG_dict = hdf_loadmat(SPSIG_mat_path)
-        
-        # set attributes to keys of SPSIG_dict
-        for k, v in SPSIG_dict.items():
-            if k.startswith('__'):
-                continue
-            
-            elif isinstance(v, dict):
-                setattr(self, k, Dict_to_Class(v))
-            else:
-                setattr(self, k, v)
 
 """
 
@@ -141,17 +105,23 @@ Define function to load dF/F traces from disk, SPSIG specific
 def load_neurons_x_time(file_path):
     """Custom method to load data as 2d array with shape (neurons, nr_timepoints)"""
     # traces should be 2d array with shape (neurons, nr_timepoints)
+    try:
+        # old version < v7.3 mat file
+        SPSIG_dict = sio.loadmat(file_path, simplify_cells = True, variable_names = 'sigCorrected')
+        print('Old matlab file')
 
-    spsig = SPSIG(file_path)
-    traces = spsig.sigCorrected
-    frame_rate = spsig.freq
-    del spsig # free up memory ?
+    except NotImplementedError:
+        # Load > v7.3 .mat hdf5 file
+        print('New_matlabfile')
+        SPSIG_dict = hdf_loadmat(file_path, use_attrdict=True, only_include='sigCorrected')
+
+    traces : np.ndarray = SPSIG_dict['sigCorrected']
+    frame_rate = 15.45703#spsig.freq
     if traces.shape[1] < traces.shape[0]:
        traces = traces.T # to match (neurons, nr_timepoints) expected shape
-    
     return traces, frame_rate
 
-def get_SPSIG_files(root : bool = False) -> list:
+def get_SPSIG_files(root : bool = False, overwrite_existing:bool = False) -> list:
     if not root:
         root = filedialog.askdirectory()
     spsigs = '**/*_SPSIG.mat'
@@ -174,38 +144,24 @@ def get_SPSIG_files(root : bool = False) -> list:
         if re_match is None:
             continue
         
+        if any(file.startswith('full_prediction_') for file in os.listdir(os.path.dirname(spsig_path))) and not overwrite_existing:
+            continue
         # Add spsig file to extract spikes from
         assert re_match is not None, f'something wrong with: {spsig_path}'
         SPSIG_files.append(spsig_path)
     
     return SPSIG_files
 
-def progress_bar(current_iteration: int,
-                 total_iterations: int,
-                 character: str = '🍎'):
-    bar_length = 50
-    filled_length = round(bar_length * current_iteration / total_iterations)
-    # Build the progress bar
-    bar = character * filled_length
-    no_bar = ' -' * (bar_length - filled_length)
-    progress = round((current_iteration / total_iterations) * 100)
-    print(bar + no_bar, f'{progress} %', end='\r')        
-
-
 
 if __name__ == '__main__':
-    if 'Demo scripts' in os.getcwd():
-        sys.path.append( os.path.abspath('..') ) # add parent directory to path for imports
-        os.chdir('..')  # change to main directory
-        print('Current working directory: {}'.format( os.getcwd() ))
-    
-    SPSIG_files = get_SPSIG_files()
-
+    SPSIG_files = get_SPSIG_files(overwrite_existing=True)#root='/Volumes/my_SSD/NiNdata/data', overwrite_existing=False)
     # align all files
-    total_iter = len(SPSIG_files)
-    print('Found {} ..._SPSIG.mat files, starting to extract spikes!'.format(total_iter))
+    n_files = len(SPSIG_files)
+    if n_files > 0:
+        print('Found {} ..._SPSIG.mat files, starting to extract spikes!'.format(n_files))
+        for f in SPSIG_files: print(f)
 
-    for i, file in enumerate(SPSIG_files):
-        main(file)
-        print('Spike estimation from {} completed!'.format(file))
-        progress_bar(i, total_iter)
+        for i, file in enumerate(SPSIG_files):
+            main(file)
+            print('Spike estimation from {} completed!'.format(file))
+            _ = gc.collect()

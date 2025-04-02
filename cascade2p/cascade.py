@@ -680,7 +680,7 @@ def predict(
             # samples = ((model, XX_sel[s,:,:]) for s in range(XX_sel.shape[0])) # samples generator
             # with mp.Pool(processes=mp.cpu_count()) as pool:
             #     res = pool.starmap(single_prediction, samples)
-            prediction_flat = model.predict(XX_sel, batch_size = batch_size * 2, verbose=verbose)
+            prediction_flat = model.predict(XX_sel, batch_size = batch_size, verbose=verbose)
             prediction = np.reshape(prediction_flat, (len(neuron_idx), XX.shape[1]))
 
             Y_predict[neuron_idx, :] += prediction / len(models)  # average predictions
