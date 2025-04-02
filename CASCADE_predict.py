@@ -17,7 +17,7 @@ the pretrained model ('model_name'). The output is a matrix with the inferred sp
 import os, sys, glob, re, gc
 
 import numpy as np
-import scipy.io as sio
+import scipy.io.matlab as sio_mtl
 import ruamel.yaml as yaml
 yaml = yaml.YAML(typ='rt')
 
@@ -79,7 +79,7 @@ def main(spsig_file:str,
     save_path = os.path.join(folder, 'full_prediction_'+os.path.basename(spsig_file))
 
     # save 
-    sio.savemat(save_path+'.mat', {'spike_prob':spike_prob})
+    sio_mtl.savemat(save_path+'.mat', {'spike_prob':spike_prob})
 
     """
 
@@ -107,11 +107,11 @@ def load_neurons_x_time(file_path):
     # traces should be 2d array with shape (neurons, nr_timepoints)
     try:
         # old version < v7.3 mat file
-        SPSIG_dict = sio.loadmat(file_path, simplify_cells = True, variable_names = 'sigCorrected')
+        SPSIG_dict = sio_mtl.loadmat(file_path, simplify_cells = True, variable_names = 'sigCorrected')
         print('Old matlab file')
 
     except NotImplementedError:
-        # Load > v7.3 .mat hdf5 file
+        # Load >= v7.3 .mat hdf5 file
         print('New_matlabfile')
         SPSIG_dict = hdf_loadmat(file_path, use_attrdict=True, only_include='sigCorrected')
 
